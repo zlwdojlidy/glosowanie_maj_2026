@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Mapa do głosowania na bufory i strefy LoZFS</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      font-family: sans-serif;
+    }
+
+    body {
+      display: flex;
+    }
+
+    #sidebar {
+      width: 320px;
+      height: 100%;
+      overflow-y: auto;
+      box-sizing: border-box;
+      padding: 12px;
+      background: white;
+      border-right: 1px solid #ccc;
+      z-index: 1000;
+    }
+
+    #sidebar h2 {
+      margin-top: 0;
+    }
+
+    #feature-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .feature-list-item {
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      padding: 8px;
+      cursor: pointer;
+      text-align: left;
+      transition: 0.15s;
+      background: white;
+    }
+
+    .feature-list-item:hover {
+      filter: brightness(0.96);
+    }
+
+    .feature-list-item.active {
+      outline: 3px solid #333;
+    }
+
+    .vote-yes {
+      background: rgba(44, 162, 95, 0.2);
+      border-color: #2ca25f;
+    }
+
+    .vote-no {
+      background: rgba(222, 45, 38, 0.2);
+      border-color: #de2d26;
+    }
+
+    .vote-neutral {
+      background: rgba(119, 119, 119, 0.2);
+      border-color: #777;
+    }
+    
+    .vote-discuss {
+      background: rgba(222, 162, 38, 0.2);
+      border-color: #770;
+    }
+
+    .feature-name {
+      font-weight: bold;
+      display: block;
+    }
+
+    .feature-meta {
+      margin-top: 3px;
+      font-size: 12px;
+      color: #555;
+    }
+
+    #map {
+      flex: 1;
+      height: 100%;
+    }
+
+    .trail-label {
+      font-weight: bold;
+      font-size: 12px;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid #666;
+      border-radius: 4px;
+      padding: 2px 4px;
+    }
+
+    .panel {
+      background: white;
+      padding: 10px;
+      border-radius: 6px;
+      box-shadow: 0 0 6px rgba(0,0,0,0.3);
+      font-size: 13px;
+      width: 220px;
+    }
+
+    .legend-item {
+      margin: 4px 0;
+    }
+
+    .box {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    button {
+      width: 100%;
+      padding: 6px;
+      margin-top: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    .active-filter {
+      outline: 3px solid #333;
+    }
+
+    #votes-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+    }
+
+    #votes-modal-content {
+      width: min(900px, 90vw);
+      height: min(700px, 85vh);
+      background: white;
+      border-radius: 10px;
+      padding: 16px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    #votes-text {
+      flex: 1;
+      width: 100%;
+      resize: none;
+      font-family: monospace;
+      font-size: 14px;
+      box-sizing: border-box;
+      padding: 10px;
+    }
+  </style>
+</head>
+
+<body>
+  <aside id="sidebar">
+    <h2>Obszary</h2>
+
+    <div style="font-size:12px; line-height:1.4; color:#555; margin-bottom:10px;">
+      Kliknij nazwę obszaru, aby go przybliżyć i oddać głos.
+    </div>
+
+    <div id="feature-list"></div>
+  </aside>
+
+  <div id="map"></div>
+
+  <div id="votes-modal">
+    <div id="votes-modal-content">
+      <h2 style="margin:0;">Głosy do skopiowania</h2>
+
+      <div style="font-size:13px; color:#555;">
+        Skopiuj poniższą listę i wyślij ją na adres: zlw.dojlidy@gmail.com
+        W przypadku uwag, dopisz je w mailu pod listą głosów.
+      </div>
+
+      <button onclick="copyVotes()">Kopiuj do schowka</button>
+
+      <textarea id="votes-text" readonly></textarea>
+
+      <button onclick="closeVotesModal()">Zamknij</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/esri-leaflet@3.0.12/dist/esri-leaflet.js"></script>
+
+  <script>
+    const GEOJSON_FILE = 'propozycje.geojson';
+    const USTALONE_FILE = 'ustalone.geojson';
+
+    const map = L.map('map').setView([53.2, 23.3], 11);
+
+    const osmBase = L.tileLayer(
+      'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+      {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }
+    ).addTo(map);
+
+    const mbdlOverlay = L.esri.dynamicMapLayer({
+      url: 'https://mapserver.bdl.lasy.gov.pl/arcgis/rest/services/WMS_BDL/MapServer',
+      layers: [3, 5],
+      format: 'png32',
+      transparent: true,
+      opacity: 0.8,
+      attribution: 'MBDL / Lasy Państwowe'
+    });
+
+    L.control.layers(
+      { 'OpenStreetMap': osmBase },
+      { 'MBDL: oddziały i wydzielenia': mbdlOverlay },
+      { collapsed: false }
+    ).addTo(map);
+
+    const votes = {};
+    const layersById = {};
+    const listItemsById = {};
+    let currentFilter = 'all';
+
+    const voteColors = {
+      yes: '#2ca25f',
+      no: '#de2d26',
+      neutral: '#777777',
+      discuss: '#dea226'
+    };
+
+    function getFeatureId(feature) {
+      return (
+        feature.properties.id ||
+        feature.properties.fid ||
+        feature.properties.name ||
+        crypto.randomUUID()
+      );
+    }
+
+    function getFeatureName(feature) {
+      const p = feature.properties || {};
+      const raw = p.name ?? p.nazwa ?? p.NAZWA ?? p.Name ?? p.NAME ?? '';
+      const name = String(raw).trim();
+      return name || null;
+    }
+
+    function getStyle(vote) {
+      return {
+        color: voteColors[vote],
+        fillColor: voteColors[vote],
+        weight: 2,
+        fillOpacity: 0.35 //vote === 'neutral' ? 0.25 : 0.45
+      };
+    }
+
+    function formatLength(value) {
+      const n = Number(value || 0);
+      return n ? (n / 1000).toFixed(3) + ' km' : 'n/d';
+    }
+
+    function formatArea(value) {
+      const n = Number(value || 0);
+      return n ? (n / 10000).toFixed(2) + ' ha' : 'brak danych';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function updateListItemVote(id) {
+      const item = listItemsById[id];
+      if (!item) return;
+      item.classList.remove('vote-yes', 'vote-no', 'vote-neutral', 'vote-discuss');
+      item.classList.add('vote-' + votes[id]);
+    }
+
+    function setActiveListItem(id) {
+      Object.values(listItemsById).forEach(item => item.classList.remove('active'));
+      const item = listItemsById[id];
+      if (item) {
+        item.classList.add('active');
+        item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+
+    function zoomToFeature(id) {
+      const layer = layersById[id];
+      if (!layer) return;
+
+      if (!map.hasLayer(layer)) {
+        setFilter('all');
+      }
+
+      const bounds = layer.getBounds();
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { maxZoom: 17, padding: [40, 40] });
+      }
+
+      layer.openPopup();
+      setActiveListItem(id);
+    }
+
+    function updateSummary() {
+      const totals = { yes: 0, no: 0, neutral: 0, discuss: 0 };
+
+      Object.entries(votes).forEach(([id, vote]) => {
+        const layer = layersById[id];
+        if (!layer) return;
+        const area = Number(layer.feature.properties.area_m2 || 0);
+        totals[vote] += area;
+      });
+
+      document.getElementById('summary-yes').textContent =
+        (totals.yes / 10000).toFixed(2) + ' ha';
+      document.getElementById('summary-no').textContent =
+        (totals.no / 10000).toFixed(2) + ' ha';
+      document.getElementById('summary-neutral').textContent =
+        (totals.neutral / 10000).toFixed(2) + ' ha';
+        document.getElementById('summary-discuss').textContent =
+        (totals.discuss / 10000).toFixed(2) + ' ha';
+    }
+
+    function setVote(id, vote) {
+      votes[id] = vote;
+      const layer = layersById[id];
+      if (layer) layer.setStyle(getStyle(vote));
+      updateListItemVote(id);
+      updateVisibility();
+      updateSummary();
+    }
+
+    function clearVotes() {
+      Object.keys(votes).forEach(id => {
+        votes[id] = 'neutral';
+        const layer = layersById[id];
+        if (layer) layer.setStyle(getStyle('neutral'));
+        updateListItemVote(id);
+      });
+
+      updateVisibility();
+      updateSummary();
+    }
+
+    function setFilter(filter) {
+      currentFilter = filter;
+
+      document
+        .querySelectorAll('.filter-button')
+        .forEach(btn => btn.classList.remove('active-filter'));
+
+      const active = document.getElementById('filter-' + filter);
+      if (active) active.classList.add('active-filter');
+
+      updateVisibility();
+    }
+
+    function updateVisibility() {
+      Object.entries(layersById).forEach(([id, layer]) => {
+        const vote = votes[id];
+        let visible = true;
+
+        if (currentFilter === 'yes') visible = vote === 'yes';
+        if (currentFilter === 'no') visible = vote === 'no';
+        if (currentFilter === 'neutral') visible = vote === 'neutral';
+        if (currentFilter === 'discuss') visible = vote === 'discuss';
+
+        if (visible) {
+          if (!map.hasLayer(layer)) layer.addTo(map);
+        } else {
+          if (map.hasLayer(layer)) map.removeLayer(layer);
+        }
+      });
+    }
+
+    function voteToLabel(vote) {
+      if (vote === 'yes') return 'TAK';
+      if (vote === 'no') return 'NIE';
+      if (vote === 'discuss') return 'DO DYSKUSJI';
+      return 'BRAK ZDANIA';
+    }
+
+    function buildVotesText() {
+      return Object.entries(votes)
+        .map(([id, vote]) => {
+          const layer = layersById[id];
+          if (!layer) return null;
+
+          const name = getFeatureName(layer.feature);
+          if (!name) return null;
+
+          return `${name}: ${voteToLabel(vote)}`;
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+
+    function showVotesDialog() {
+      document.getElementById('votes-text').value =  buildVotesText();
+      document.getElementById('votes-modal').style.display = 'flex';
+    }
+
+    function closeVotesModal() {
+      document.getElementById('votes-modal').style.display = 'none';
+    }
+
+    async function copyVotes() {
+      const textarea = document.getElementById('votes-text');
+      textarea.focus();
+      textarea.select();
+      textarea.setSelectionRange(0, 999999);
+
+      try {
+        await navigator.clipboard.writeText(textarea.value);
+        alert('Skopiowano do schowka');
+      } catch (error) {
+        document.execCommand('copy');
+        alert('Skopiowano do schowka');
+      }
+    }
+
+    fetch(USTALONE_FILE)
+      .then(response => response.json())
+      .then(data => {
+        L.geoJSON(data, {
+          style: {
+            color: '#1565c0',
+            weight: 2,
+            fillColor: '#42a5f5',
+            fillOpacity: 0.22
+          }
+        }).addTo(map);
+      })
+      .catch(error => {
+        console.error('Nie udało się wczytać ustalone.geojson:', error);
+      });
+
+    fetch(GEOJSON_FILE)
+      .then(response => response.json())
+      .then(data => {
+        const geoLayer = L.geoJSON(data, {
+          style: () => getStyle('neutral'),
+
+          onEachFeature: (feature, layer) => {
+            const p = feature.properties || {};
+            const id = getFeatureId(feature);
+            const name = getFeatureName(feature);
+
+            if (!name) {
+              return;
+            }
+
+            votes[id] = 'neutral';
+            layersById[id] = layer;
+
+            const length = formatLength(p.length);
+            const area = formatArea(p.area_m2);
+            const opis = p.opis || "";
+
+            layer.bindTooltip(`<b>${escapeHtml(name)}</b>`, {
+              permanent: true,
+              direction: 'center',
+              className: 'trail-label'
+            });
+
+            const safeId = JSON.stringify(id);
+
+            const popup = `
+              <b>${escapeHtml(name)}</b><br>
+              Długość: ${escapeHtml(length)}<br>
+              Powierzchnia: ${escapeHtml(area)}<br><br>
+              
+              <b>Dodatkowe informacje:</b><br>
+              ${escapeHtml(opis)}
+              <br><br>
+
+              <b>Głos:</b><br>
+
+              <button onclick='setVote(${safeId}, "yes")'>TAK</button>
+              <button onclick='setVote(${safeId}, "no")'>NIE</button>
+              <button onclick='setVote(${safeId}, "neutral")'>BRAK ZDANIA</button>
+              <button onclick='setVote(${safeId}, "discuss")'>DO DYSKUSJI</button>
+            `;
+
+            layer.bindPopup(popup);
+
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'feature-list-item vote-neutral';
+            item.innerHTML = `
+              <span class="feature-name">${escapeHtml(name)}</span>
+              <span class="feature-meta">${escapeHtml(length)} · ${escapeHtml(area)}</span>
+            `;
+
+            item.addEventListener('click', () => zoomToFeature(id));
+
+            document.getElementById('feature-list').appendChild(item);
+            listItemsById[id] = item;
+
+            layer.on('mouseover', () => {
+              layer.setStyle({ weight: 5, fillOpacity: 0.65 });
+              layer.bringToFront();
+            });
+
+            layer.on('mouseout', () => {
+              layer.setStyle(getStyle(votes[id]));
+            });
+
+            layer.on('popupopen', (e) => {
+			  setActiveListItem(id);
+
+			  const px = map.project(e.popup.getLatLng());
+			  px.x += 220;
+
+			  map.panTo(map.unproject(px), {
+				animate: true
+			  });
+			});
+          }
+        }).addTo(map);
+
+        const bounds = geoLayer.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds);
+        }
+
+        updateSummary();
+      })
+      .catch(error => {
+        console.error('Nie udało się wczytać GeoJSON:', error);
+        alert('Nie udało się wczytać pliku ' + GEOJSON_FILE);
+      });
+
+    const legend = L.control({ position: 'bottomright' });
+
+    legend.onAdd = function () {
+      const div = L.DomUtil.create('div', 'panel');
+      div.innerHTML = `
+        <b>Legenda</b>
+
+        <div class="legend-item">
+          <span class="box" style="background:${voteColors.yes}"></span>
+          TAK
+        </div>
+        
+        <div class="legend-item">
+          <span class="box" style="background:${voteColors.no}"></span>
+          NIE
+        </div>
+        
+        <div class="legend-item">
+          <span class="box" style="background:${voteColors.neutral}"></span>
+          BRAK ZDANIA
+        </div>
+
+        <div class="legend-item">
+          <span class="box" style="background:${voteColors.discuss}"></span>
+          DO DYSKUSJI
+        </div>
+
+        <div class="legend-item">
+          <span class="box" style="background:#42a5f5"></span>
+          USTALONE PRZEZ ND
+        </div>
+      `;
+      return div;
+    };
+
+    legend.addTo(map);
+
+    const filterPanel = L.control({ position: 'topright' });
+
+    filterPanel.onAdd = function () {
+      const div = L.DomUtil.create('div', 'panel');
+      div.innerHTML = `
+        <b>Filtry</b><br>
+
+        <button id="filter-all" class="filter-button active-filter" onclick="setFilter('all')">
+          Pokaż wszystkie
+        </button>
+
+        <button id="filter-yes" class="filter-button" onclick="setFilter('yes')">
+          Pokaż tylko TAK
+        </button>
+        
+        <button id="filter-no" class="filter-button" onclick="setFilter('no')">
+          Pokaż tylko NIE
+        </button>
+        
+        <button id="filter-neutral" class="filter-button" onclick="setFilter('neutral')">
+          Pokaż tylko BRAK ZDANIA
+        </button>
+        
+        <button id="filter-discuss" class="filter-button" onclick="setFilter('discuss')">
+          Pokaż tylko DO DYSKUSJI
+        </button>
+
+        <hr>
+
+        <b>Powierzchnia</b><br>
+        TAK: <span id="summary-yes">0.00 ha</span><br>
+        NIE: <span id="summary-no">0.00 ha</span><br>
+        BRAK ZDANIA: <span id="summary-neutral">0.00 ha</span><br>
+        DO DYSKUSJI: <span id="summary-discuss">0.00 ha</span><br>
+
+        <hr>
+
+        <button onclick="clearVotes()">Wyczyść głosy</button>
+        <button onclick="showVotesDialog()">Pokaż głosy do skopiowania</button>
+      `;
+      return div;
+    };
+
+    filterPanel.addTo(map);
+  </script>
+</body>
+</html>
