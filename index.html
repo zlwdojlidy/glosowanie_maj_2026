@@ -122,6 +122,16 @@
       vertical-align: middle;
     }
 
+    .legend-hatch {
+      background: repeating-linear-gradient(
+        -45deg,
+        transparent,
+        transparent 2px,
+        #42a5f5 2px,
+        #42a5f5 4px
+      );
+    }
+
     button {
       width: 100%;
       padding: 6px;
@@ -215,6 +225,8 @@
       }
     ).addTo(map);
 
+    addHatchPattern();
+
     const mbdlOverlay = L.esri.dynamicMapLayer({
       url: 'https://mapserver.bdl.lasy.gov.pl/arcgis/rest/services/WMS_BDL/MapServer',
       layers: [3, 5],
@@ -234,6 +246,28 @@
     const layersById = {};
     const listItemsById = {};
     let currentFilter = 'all';
+
+    function addHatchPattern() {
+      const svgEl = document.querySelector('.leaflet-overlay-pane svg');
+      if (!svgEl) { setTimeout(addHatchPattern, 100); return; }
+      const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+      const pattern = document.createElementNS('http://www.w3.org/2000/svg', 'pattern');
+      pattern.setAttribute('id', 'hatch-blue');
+      pattern.setAttribute('patternUnits', 'userSpaceOnUse');
+      pattern.setAttribute('width', '8');
+      pattern.setAttribute('height', '8');
+      pattern.setAttribute('patternTransform', 'rotate(45)');
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', '0');
+      line.setAttribute('y1', '0');
+      line.setAttribute('x2', '0');
+      line.setAttribute('y2', '8');
+      line.setAttribute('stroke', '#1565c0');
+      line.setAttribute('stroke-width', '1.5');
+      pattern.appendChild(line);
+      defs.appendChild(pattern);
+      svgEl.prepend(defs);
+    }
 
     const voteColors = {
       yes: '#2ca25f',
@@ -444,8 +478,8 @@
           style: {
             color: '#1565c0',
             weight: 2,
-            fillColor: '#42a5f5',
-            fillOpacity: 0.22
+            fillColor: 'url(#hatch-blue)',
+            fillOpacity: 1
           }
         }).addTo(map);
       })
@@ -577,7 +611,7 @@
         </div>
 
         <div class="legend-item">
-          <span class="box" style="background:#42a5f5"></span>
+          <span class="box legend-hatch"></span>
           USTALONE PRZEZ ND
         </div>
       `;
